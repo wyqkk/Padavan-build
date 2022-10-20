@@ -1,117 +1,159 @@
-#修改TNAME: K2P 中的K2P为你需要编译的型号，注意名称要与configs/templates/目录下的名字相同
-name: Build Padavan
-
+# # # # # # # # # # #
+#  自动构建K2P 
+#      
+# # # # # # # # # # #
+name: Padavan CI MI-MINI
 on: 
   release:
     types: [published]
+
   push:
-    tags:
-    - 'v*'
-  #  branches: 
-  #    - master
-#  schedule:
-#    - cron: 0 8 * * 5
+    branches: 
+      - master
+
+  schedule:
+    - cron: 0 19 * * *
+  
   watch:
     types: [started]
-
+env:
+  T_NAMES: "MI-MINI"        # 设备名字数组
+  BASE_PATH: padavan                # 基础目录
+  PUBLIC_PATH: public               # 公共目录
+  VERSION_FILE: versions.inc        # 版本后缀
+  PUBLIC_SH: public.sh              # 公共命令
+  THEME_PATH: theme
+  UPLOAD_FIRMWARE: true             # 是否打包文件
+  CLONE_URL: https://github.com/immortalwrt/padavan.git     # padavan  地址
+  CLONE_BRANCH: master              # padavan 分支
+  WORK_PATH: /opt/rt-n56u           # 工作目录 一定要加 /
+  UPLOAD_COWTRANSFER: false
+  UPLOAD_WETRANSFER: true
+  FILE_NAME: "MI-MINI"       
+  IMAGES_PATH: /opt/rt-n56u/images/    
 jobs:
   build:
     runs-on: ubuntu-18.04
-    if: github.event.repository.owner.id == github.event.sender.id
-
+    if: github.event.repository.owner.id == github.event.sender.id  # 自己点的 start
     steps:
-    - name: Checkout
+    - name: Checkout Master            # 1.导入主分支
       uses: actions/checkout@master
-    - name: Initialization environment
+    - name: Initialization Environment # 2.初始环境的设置
       env:
-        DEBIAN_FRONTEND: noninteractive
+        DEBIAN_FRONTEND: noninteractive  # 非交互模式
       run: |
         sudo apt-get update
         sudo apt-get -y install unzip libtool-bin curl cmake gperf gawk flex bison nano xxd fakeroot \
         cpio git python-docutils gettext automake autopoint texinfo build-essential help2man \
         pkg-config zlib1g-dev libgmp3-dev libmpc-dev libmpfr-dev libncurses5-dev libltdl-dev wget
-    - name: Clone source code
-      env:
-        KERNEL: 3.4
+        sudo timedatectl set-timezone 'Asia/Shanghai'  # 设置时区
+    - name: Clone Code                 # 3.拷贝代码
       run: |
-        if [ $KERNEL = "4.4" ] ; then
-        git clone --depth=1 https://github.com/MeIsReallyBa/padavan-4.4.git /opt/rt-n56u
-        else
-        git clone --depth=1 https://github.com/wyqkk/rt-n56u.git /opt/rt-n56u
-        fi
-        cd /opt/rt-n56u/toolchain-mipsel
+        git clone --depth=1 $CLONE_URL -b $CLONE_BRANCH $WORK_PATH
+    - name: Build Tool Chain           # 4.构建工具链
+      run: |
+        cd $WORK_PATH/toolchain-mipsel
         sh dl_toolchain.sh
-        mkdir -p /opt/images/
-    - name: Build Firmware
-      env:
-        TNAME: MI-MINI
-        KERNEL: 3.4
+
+        # mkdir -p toolchain-3.4.x
+        # wget https://github.com/hanwckf/padavan-toolchain/releases/download/v1.1/mipsel-linux-uclibc.tar.xz
+        # tar -xvf mipsel-linux-uclibc.tar.xz -C toolchain-3.4.x
+        mkdir ${WORK_PATH}/images/
+    - name: Clear And Build            # 5.清理构建树并开始构建
       run: |
-        cd /opt/rt-n56u/trunk
-        if [ ! -f configs/templates/$TNAME.config ] ; then
-        echo "configs/templates/$TNAME.config not found "
-        exit 1
-        fi
-        cp -f configs/templates/$TNAME.config .config
-        sed -i 's/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=n/CONFIG_FIRMWARE_INCLUDE_OPENSSL_EXE=y/g' .config
-        ################################################################################################
-        #因不同型号配置功能不一样，所以先把配置项删除，如果你自己要添加其他的，也要写上删除这一条，切记！！！
-        ################################################################################################
-        sed -i '/CONFIG_FIRMWARE_INCLUDE_SHADOWSOCKS/d' .config #删除配置项SS plus+
-        ######################################################################
-        #以下选项是定义你需要的功能（y=集成,n=忽略），重新写入到.config文件
-        ######################################################################
-        if [ $KERNEL = "4.4" ] ; then
-        echo "CONFIG_FIRMWARE_INCLUDE_MENTOHUST=n" >> .config #MENTOHUST
-        echo "CONFIG_FIRMWARE_INCLUDE_SCUTCLIENT=n" >> .config #SCUTCLIENT
-        echo "CONFIG_FIRMWARE_INCLUDE_SHADOWSOCKS=y" >> .config #SS plus+
-        echo "CONFIG_FIRMWARE_INCLUDE_SSOBFS=n" >> .config # simple-obfs混淆插件
-        echo "CONFIG_FIRMWARE_INCLUDE_ADBYBY=n >> .config #adbyby plus+
-        echo "CONFIG_FIRMWARE_INCLUDE_DNSFORWARDER=n" >> .config #DNSFORWARDER
-        echo "CONFIG_FIRMWARE_INCLUDE_SRELAY=n" >> .config #可以不集成
-        echo "CONFIG_FIRMWARE_INCLUDE_XRAY=y" >> .config #集成xray执行文件  ~4.5M
-        echo "CONFIG_FIRMWARE_INCLUDE_V2RAY=y" >> .config #集成v2ray执行文件
-        echo "CONFIG_FIRMWARE_INCLUDE_DDNSTO=n" >> .config #ddnsto  ~0.5M
-        echo "CONFIG_FIRMWARE_INCLUDE_ALDRIVER=n" >> .config  #阿里云盘  ~3m
-        echo "CONFIG_FIRMWARE_INCLUDE_ZEROTIER=n" >> .config #zerotier ~1.3M
-        echo "CONFIG_FIRMWARE_INCLUDE_ALIDDNS=n" >> .config #aliddns
+        # 1.拷贝公共文件
+        cp -r $BASE_PATH/$PUBLIC_PATH  $WORK_PATH/
+        sudo chmod +x $WORK_PATH/$PUBLIC_PATH/$PUBLIC_SH
+        # 2. 循环替换自定义默认模板和构建，单个设备的 sh 拷贝 t_item 需要编译的固件名字
+        for t_item in $T_NAMES;
+        do
+        if [ ! -e $BASE_PATH/$t_item/$t_item.config ] ; then
+          echo "${BASE_PATH}/${t_item}/${t_item}.config 自定义模板文件未找到"
         else
-        echo "CONFIG_FIRMWARE_INCLUDE_MENTOHUST=n" >> .config #MENTOHUST
-        echo "CONFIG_FIRMWARE_INCLUDE_SCUTCLIENT=n" >> .config #SCUTCLIENT
-        echo "CONFIG_FIRMWARE_INCLUDE_SHADOWSOCKS=y" >> .config #SS plus+
-        echo "CONFIG_FIRMWARE_INCLUDE_SSOBFS=n" >> .config # simple-obfs混淆插件
-        echo "CONFIG_FIRMWARE_INCLUDE_SSSERVER=n" >> .config #SS server
-        echo "CONFIG_FIRMWARE_INCLUDE_DNSFORWARDER=n" >> .config #DNSFORWARDER
-        echo "CONFIG_FIRMWARE_INCLUDE_ADBYBY=n" >> .config #adbyby plus+
-        echo "CONFIG_FIRMWARE_INCLUDE_FRPC=n" >> .config #内网穿透FRPC
-        echo "CONFIG_FIRMWARE_INCLUDE_FRPS=n" >> .config #内网穿透FRPS
-        echo "CONFIG_FIRMWARE_INCLUDE_TUNSAFE=n" >> .config #TUNSAFE
-        echo "CONFIG_FIRMWARE_INCLUDE_ALIDDNS=n" >> .config #阿里DDNS
-        echo "CONFIG_FIRMWARE_INCLUDE_SMARTDNS=n" >> .config #smartdns
-        echo "CONFIG_FIRMWARE_INCLUDE_SMARTDNSBIN=n" >> .config #smartdns二进制文件
-        echo "CONFIG_FIRMWARE_INCLUDE_V2RAY=y" >> .config #集成v2ray执行文件（3.8M左右)，如果不集成，会从网上下载下来执行，不影响正常使用
-        echo "CONFIG_FIRMWARE_INCLUDE_TROJAN=y" >> .config #集成trojan执行文件(1.1M左右)，如果不集成，会从网上下载下来执行，不影响正常使用
-        echo "CONFIG_FIRMWARE_INCLUDE_KOOLPROXY=n" >> .config #KP广告过滤
-        echo "CONFIG_FIRMWARE_INCLUDE_CADDY=n" >> .config #在线文件管理服务
-        echo "CONFIG_FIRMWARE_INCLUDE_CADDYBIN=n" >> .config #集成caddu执行文件，此文件有13M,请注意固件大小。如果不集成，会从网上下载下来执行，不影响正常使用
-        echo "CONFIG_FIRMWARE_INCLUDE_ADGUARDHOME=n" >> .config
-        echo "CONFIG_FIRMWARE_INCLUDE_SRELAY=n" >> .config #可以不集成
-        echo "CONFIG_FIRMWARE_INCLUDE_WYY=n" >> .config #网易云解锁
-        echo "CONFIG_FIRMWARE_INCLUDE_WYYBIN=n" >> .config #网易云解锁GO版本执行文件（4M多）注意固件超大小,不集成会自动下载
-        echo "CONFIG_FIRMWARE_INCLUDE_ZEROTIER=n" >> .config #zerotier ~1.3M
+          cp -f $BASE_PATH/$t_item/$t_item.config $WORK_PATH/trunk/configs/templates/$t_item.config
+          echo "${t_item} 修改模板完成"
         fi
-        #########################################################################################
-        #自定义添加其它功能请参考源码configs/templates/目录下的config文件。按照上面的格式添加即可
-        #格式如下：
-        #sed -i '/自定义项/d' .config
-        #echo "自定义项=y" >> .config
-        #########################################################################################
-        sudo ./clear_tree
-        sudo ./build_firmware_modify $TNAME 0
-        sudo mv -f images/*.trx /opt/images/
-    - name : Upload packages
+        if [ ! -f $BASE_PATH/$t_item/$t_item.sh ] ; then
+          echo "${BASE_PATH}/${t_item}/${t_item}.sh 自定义SH文件未找到"
+        else
+          cp -f $BASE_PATH/$t_item/$t_item.sh  $WORK_PATH/
+          sudo chmod +x $WORK_PATH/$t_item.sh
+          echo "${t_item} 自定义SH文件拷贝成功"
+        fi
+        if [ ! -d $BASE_PATH/$t_item/$THEME_PATH ] ; then
+          echo "${BASE_PATH}/${t_item}/${THEME_PATH} 自定义主题文件夹未找到"
+        elif [! -d $WORK_PATH/$PUBLIC_PATH/$THEME_PATH ] ; then
+              cp -r $BASE_PATH/$t_item/$THEME_PATH  $WORK_PATH/$PUBLIC_PATH
+              echo "${THEME_PATH} 自定义主题文件夹拷贝成功"  
+           else
+               #删除public拷贝的主题
+              sudo rm -rf $WORK_PATH/$PUBLIC_PATH/$THEME_PATH
+              cp -r $BASE_PATH/$t_item/$THEME_PATH  $WORK_PATH/$PUBLIC_PATH
+              echo "${THEME_PATH} 自定义主题文件夹拷贝成功"  
+        fi
+        done
+        # 3. 开始构建
+        cd $WORK_PATH/trunk
+        for t_item in $T_NAMES;
+        do
+        cp -f $WORK_PATH/trunk/configs/templates/$t_item.config .config  # 拷贝模板到 .config
+        echo "执行 ${PUBLIC_SH} sh"
+        sudo $WORK_PATH/$PUBLIC_PATH/$PUBLIC_SH
+        if [ -e $WORK_PATH/$t_item.sh ] ; then
+          echo "执行自定义 ${t_item} sh"
+          sudo $WORK_PATH/$t_item.sh
+        fi
+        # 4. 清理构建
+         cp -f configs/templates/$t_item.config .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_CURL/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_SCUTCLIENT/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_GDUT_DRCOM/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_DOGCOM/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_MINIEAP/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_NJIT_CLIENT/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_NAPT66/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_SOFTETHERVPN_SERVER/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_SOFTETHERVPN_CLIENT/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_SOFTETHERVPN_CMD/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_VLMCSD/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_TTYD/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_LRZSZ/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_HTOP/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_NANO/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_IPERF3/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_DUMP1090/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_RTL_SDR/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_MTR/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_SOCAT/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_SRELAY/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_MENTOHUST/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_FRPC/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_FRPS/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_TUNSAFE/d' .config
+          sed -i '/CONFIG_FIRMWARE_INCLUDE_WIREGUARD/d' .config
+          sed -i 's/{ "wl_auth_mode", "psk" },/{ "wl_auth_mode", "open" },/g' $WORK_PATH/trunk/user/shared/defaults.c
+          sed -i 's/{ "rt_auth_mode", "psk" },/{ "rt_auth_mode", "open" },/g' $WORK_PATH/trunk/user/shared/defaults.c
+         sudo ./clear_tree  
+        sudo ./build_firmware_modify $t_item          # $t_item  是循环的子对象
+        sudo mv -f images/*.trx ${WORK_PATH}/images/
+        done
+        # echo "::set-env name=FILE_NAME::$T_NAMES-$(date "+%Y%m%d")"  # 包名
+        # echo "::set-env name=IMAGES_PATH::${WORK_PATH}/images/"      # 打包目录
+    - name : Upload Packages           # 6. 打包文件并且上传到当前主分支
       uses: actions/upload-artifact@master
-      if: always()
+      if: env.UPLOAD_FIRMWARE == 'true' && success()   # 成功才执行
       with:
-        name: Padavan-packages
-        path: /opt/images
+        name: Padavan-${{env.FILE_NAME}}
+        path: ${{ env.IMAGES_PATH }}
+    - name: Upload firmware to cowtransfer
+      if: env.UPLOAD_COWTRANSFER == 'true' && success()
+      run: |
+        curl -fsSL git.io/file-transfer | sh
+        ./transfer cow --block 2621440 -s -p 64 --no-progress ${IMAGES_PATH} 2>&1 | tee cowtransfer.log
+        echo "::warning file=cowtransfer.com::$(cat cowtransfer.log | grep https)"
+    - name: Upload firmware to WeTransfer
+      if: env.UPLOAD_WETRANSFER == 'true' && success()
+      run: |
+        curl -fsSL git.io/file-transfer | sh
+        ./transfer wet -s -p 16 --no-progress ${IMAGES_PATH} 2>&1 | tee wetransfer.log
+        echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
